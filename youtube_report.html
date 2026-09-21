@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>YouTube Video Success Analyzer</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f0f4f8; color: #1a202c; }
+  header { background: #ff0000; color: white; padding: 20px 28px; }
+  header h1 { font-size: 22px; font-weight: 700; }
+  header p { font-size: 13px; opacity: 0.85; margin-top: 4px; }
+  .stats { display: grid; grid-template-columns: repeat(4,1fr); gap: 12px; padding: 16px 28px; }
+  .stat { background: white; border-radius: 10px; padding: 14px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+  .stat-val { font-size: 24px; font-weight: 700; color: #ff0000; }
+  .stat-label { font-size: 12px; color: #718096; margin-top: 3px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; padding: 0 28px 28px; }
+  .card { background: white; border-radius: 10px; padding: 18px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+  .card h2 { font-size: 14px; font-weight: 600; color: #2d3748; margin-bottom: 14px; padding-bottom: 8px; border-bottom: 2px solid #ff0000; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; padding: 6px 8px; background: #f7fafc; color: #4a5568; font-size: 12px; }
+  td { padding: 6px 8px; border-bottom: 1px solid #f0f4f8; }
+  .rules { list-style: none; }
+  .rules li { padding: 6px 0; font-size: 13px; border-bottom: 1px solid #f0f4f8; line-height: 1.5; }
+  .accuracy { font-size: 42px; font-weight: 700; color: #276749; text-align: center; padding: 10px 0; }
+  .acc-label { text-align: center; font-size: 13px; color: #718096; }
+  .full { grid-column: 1 / -1; }
+</style>
+</head>
+<body>
+<header>
+  <h1>📊 YouTube Video Success Analyzer</h1>
+  <p>Dataset: 6,000 videos | Generated: 2026-09-20 16:08 | Model accuracy: 79.7%</p>
+</header>
+
+<div class="stats">
+  <div class="stat"><div class="stat-val">6,000</div><div class="stat-label">Total Videos</div></div>
+  <div class="stat"><div class="stat-val">1,500</div><div class="stat-label">Successful Videos</div></div>
+  <div class="stat"><div class="stat-val">51,935</div><div class="stat-label">Avg Views</div></div>
+  <div class="stat"><div class="stat-val">79.7%</div><div class="stat-label">Model Accuracy</div></div>
+</div>
+
+<div class="grid">
+
+  <div class="card">
+    <h2>🎯 Topic Selection Rules</h2>
+    <ul class="rules"><li>✅ search_volume > 387 (минимальный спрос)</li><li>✅ competition < 3701 (низкая конкуренция)</li><li>✅ demand_supply > 0.2 (соотношение спрос/конкуренция)</li><li>✅ autocomplete_pos <= 14 (позиция в автозаполнении)</li><li>✅ video_length: 10-15 минут (оптимальная длина)</li><li>✅ Добавить число в заголовок (повышает успех на 6.7%)</li><li>✅ Начинать с 'How to' (повышает успех на 9.2%)</li><li>✅ Публиковать в Wed</li></ul>
+  </div>
+
+  <div class="card">
+    <h2>🔍 Feature Correlations with Success</h2>
+    <table><tr><th>Feature</th><th>Correlation</th></tr><tr><td>channel_subs</td><td style='color:#276749;font-weight:600'>+0.177</td></tr><tr><td>has_thumbnail_face</td><td style='color:#276749;font-weight:600'>+0.115</td></tr><tr><td>autocomplete_pos</td><td style='color:#c53030;font-weight:600'>-0.081</td></tr><tr><td>title_has_how</td><td style='color:#276749;font-weight:600'>+0.064</td></tr><tr><td>title_has_number</td><td style='color:#276749;font-weight:600'>+0.046</td></tr><tr><td>demand_supply</td><td style='color:#276749;font-weight:600'>+0.017</td></tr><tr><td>competition</td><td style='color:#c53030;font-weight:600'>-0.005</td></tr><tr><td>search_volume</td><td style='color:#276749;font-weight:600'>+0.004</td></tr></table>
+  </div>
+
+  <div class="card">
+    <h2>🤖 Model Feature Importance (Random Forest)</h2>
+    <table><tr><th>Feature</th><th>Importance</th><th>Score</th></tr><tr><td>channel_subs</td><td><div style='background:#276749;height:12px;width:111px;border-radius:3px'></div></td><td style='color:#276749;font-weight:600'>0.279</td></tr><tr><td>ctr</td><td><div style='background:#276749;height:12px;width:37px;border-radius:3px'></div></td><td style='color:#276749;font-weight:600'>0.093</td></tr><tr><td>competition</td><td><div style='background:#276749;height:12px;width:36px;border-radius:3px'></div></td><td style='color:#276749;font-weight:600'>0.091</td></tr><tr><td>video_length_min</td><td><div style='background:#276749;height:12px;width:36px;border-radius:3px'></div></td><td style='color:#276749;font-weight:600'>0.090</td></tr><tr><td>search_volume</td><td><div style='background:#276749;height:12px;width:35px;border-radius:3px'></div></td><td style='color:#276749;font-weight:600'>0.089</td></tr><tr><td>demand_supply</td><td><div style='background:#276749;height:12px;width:33px;border-radius:3px'></div></td><td style='color:#276749;font-weight:600'>0.083</td></tr><tr><td>published_hour</td><td><div style='background:#276749;height:12px;width:26px;border-radius:3px'></div></td><td style='color:#276749;font-weight:600'>0.066</td></tr><tr><td>autocomplete_pos</td><td><div style='background:#276749;height:12px;width:26px;border-radius:3px'></div></td><td style='color:#276749;font-weight:600'>0.064</td></tr></table>
+  </div>
+
+  <div class="card">
+    <h2>🏆 Top Categories by Success Rate</h2>
+    <table><tr><th>Category</th><th>Success Rate</th><th>Videos</th></tr><tr><td>Flask</td><td>29.2%</td><td>305</td></tr><tr><td>Automation</td><td>27.6%</td><td>330</td></tr><tr><td>API Integration</td><td>27.1%</td><td>310</td></tr><tr><td>NumPy</td><td>26.9%</td><td>309</td></tr><tr><td>Telegram Bot</td><td>26.8%</td><td>321</td></tr></table>
+  </div>
+
+  <div class="card full">
+    <h2>📋 How to Use This Analysis</h2>
+    <p style="font-size:13px;line-height:1.8;color:#4a5568">
+      <b>1. Topic Research:</b> Find topics with high search_volume (>1000/month) and low competition (&lt;500 videos).<br>
+      <b>2. Demand/Supply Score:</b> Calculate demand_supply = search_volume / competition. Score > 5 = good opportunity.<br>
+      <b>3. Title Optimization:</b> Start with "How to", include a number (e.g. "5 Ways to..."), keep length 50-70 chars.<br>
+      <b>4. Video Length:</b> Aim for 10-15 minutes — optimal for watch time and algorithm.<br>
+      <b>5. Publishing Time:</b> Best day: Wed | Best hours: 1:00, 13:00, 6:00<br>
+      <b>6. Thumbnail:</b> Include a face — increases CTR by ~15%.
+    </p>
+  </div>
+
+</div>
+</body>
+</html>
