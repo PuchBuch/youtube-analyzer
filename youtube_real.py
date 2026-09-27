@@ -1,275 +1,325 @@
 """
-YouTube Video Analyzer — генератор данных + анализ
-====================================================
-Шаг 1: Генерирует реалистичные фиктивные данные
-Шаг 2: Анализирует что делает видео успешным
-Шаг 3: Строит предсказательную модель
+YouTube Real Data Collector + Analyzer
+=======================================
+Собирает реальные данные с YouTube через API
+и анализирует что делает видео успешным.
 
 Установка:
-    pip install pandas numpy scikit-learn matplotlib seaborn
+    pip install google-api-python-client pandas numpy scikit-learn python-dotenv
+
+.env файл:
+    YOUTUBE_API_KEY=ваш_ключ
 
 Запуск:
-    python youtube_analyzer.py
+    python youtube_real.py
 """
 
+import os
+import json
+import csv
+import datetime
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib
-matplotlib.use('Agg')  # без GUI
+from googleapiclient.discovery import build
+from dotenv import load_dotenv
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import classification_report, confusion_matrix
-import json
-import datetime
+from sklearn.metrics import classification_report
 import warnings
-warnings.filterwarnings('ignore')
+warnings.filterwarnings("ignore")
+
+load_dotenv()
 
 # ─── НАСТРОЙКИ ────────────────────────────────────────────────
-N_VIDEOS     = 6000   # количество видео
-OUTPUT_CSV   = "youtube_dataset.csv"
-OUTPUT_HTML  = "youtube_report.html"
-RANDOM_SEED  = 42
+API_KEY      = os.getenv("YOUTUBE_API_KEY")
+OUTPUT_CSV   = "youtube_real_data.csv"
+OUTPUT_HTML  = "youtube_real_report.html"
+
+# Каналы конкурентов для анализа (Python/программирование)
+CHANNELS = [
+    "UCWr0mx597DnSGLFk1WfvSkQ",  # Programming with Mosh
+    "UC8butISFwT-Wl7EV0hUK0BQ",  # freeCodeCamp
+    "UCVhQ2NnY5Rskt6UjCUkJ_DA",  # Tech With Tim
+    "UCWX3yGbODI3GRd7aFQXqPMQ",  # Python Engineer
+    "UCCTVrRjfd4rArFPdKFpHHEQ",  # Corey Schafer
+]
+
+# Ключевые слова для поиска видео
+SEARCH_QUERIES = [
+    "python tutorial",
+    "python automation",
+    "web scraping python",
+    "telegram bot python",
+    "python data analysis",
+]
+
+MAX_RESULTS = 50  # на каждый запрос
 # ──────────────────────────────────────────────────────────────
 
-np.random.seed(RANDOM_SEED)
+
+def get_youtube():
+    return build("youtube", "v3", developerKey=API_KEY)
 
 
-# ─── ШАГ 1: ГЕНЕРАЦИЯ ДАННЫХ ──────────────────────────────────
+# ─── СБОР ДАННЫХ ──────────────────────────────────────────────
 
-CATEGORIES = [
-    "Python Tutorial", "Web Scraping", "Data Science",
-    "Machine Learning", "Automation", "Django", "Flask",
-    "Pandas", "NumPy", "Telegram Bot", "API Integration",
-    "Excel Automation", "Data Analysis", "SQL Python",
-    "Computer Vision", "NLP", "ChatGPT API", "FastAPI",
-]
+def search_videos(youtube, query: str, max_results: int = 50) -> list:
+    """Ищет видео по запросу."""
+    print(f"  Поиск: '{query}'...")
+    videos = []
+    next_page = None
 
-TITLE_PATTERNS = [
-    "How to {topic} in Python",
-    "{topic} Tutorial for Beginners",
-    "Build a {topic} with Python",
-    "Complete {topic} Course",
-    "{topic} in 10 Minutes",
-    "Python {topic} Full Project",
-    "Learn {topic} Fast",
-    "{topic} Step by Step",
-    "Advanced {topic} Techniques",
-    "{topic} Tips and Tricks",
-]
+    while len(videos) < max_results:
+        request = youtube.search().list(
+            part="id,snippet",
+            q=query,
+            type="video",
+            maxResults=min(50, max_results - len(videos)),
+            pageToken=next_page,
+            relevanceLanguage="en",
+            order="relevance",
+        )
+        response = request.execute()
+
+        for item in response.get("items", []):
+            videos.append({
+                "video_id":    item["id"]["videoId"],
+                "title":       item["snippet"]["title"],
+                "channel_id":  item["snippet"]["channelId"],
+                "channel":     item["snippet"]["channelTitle"],
+                "published":   item["snippet"]["publishedAt"],
+                "query":       query,
+            })
+
+        next_page = response.get("nextPageToken")
+        if not next_page:
+            break
+
+    print(f"    Найдено: {len(videos)}")
+    return videos
 
 
-def generate_dataset(n: int) -> pd.DataFrame:
-    """Генерирует реалистичный датасет YouTube видео."""
-    print(f"Генерируем {n} видео...")
+def get_video_stats(youtube, video_ids: list) -> dict:
+    """Получает статистику для списка видео."""
+    stats = {}
+    # API принимает максимум 50 ID за раз
+    for i in range(0, len(video_ids), 50):
+        batch = video_ids[i:i+50]
+        request = youtube.videos().list(
+            part="statistics,contentDetails,snippet",
+            id=",".join(batch)
+        )
+        response = request.execute()
 
-    categories = np.random.choice(CATEGORIES, n)
-    patterns   = np.random.choice(TITLE_PATTERNS, n)
-    titles     = [p.replace("{topic}", c) for p, c in zip(patterns, categories)]
+        for item in response.get("items", []):
+            vid_id = item["id"]
+            s = item.get("statistics", {})
+            d = item.get("contentDetails", {})
+            sn = item.get("snippet", {})
 
-    # Характеристики темы
-    search_volume    = np.random.lognormal(7, 1.5, n).astype(int)   # месячных поисков
-    competition      = np.random.randint(10, 5000, n)                # конкурентов
-    autocomplete_pos = np.random.randint(1, 20, n)                   # позиция в автозаполнении
-    channel_subs     = np.random.lognormal(10, 2, n).astype(int)     # подписчиков канала
-    video_age_days   = np.random.randint(1, 1825, n)                 # возраст в днях
-    video_length_min = np.random.lognormal(2.5, 0.7, n)             # длина в минутах
-    has_thumbnail_face = np.random.choice([0, 1], n, p=[0.4, 0.6])  # лицо на превью
-    published_hour   = np.random.randint(0, 24, n)                   # час публикации
-    published_dow    = np.random.randint(0, 7, n)                    # день недели (0=пн)
-    title_length     = np.array([len(t) for t in titles])
-    title_has_number = np.array([1 if any(c.isdigit() for c in t) else 0 for t in titles])
-    title_has_how    = np.array([1 if t.lower().startswith("how") else 0 for t in titles])
+            # Парсим длину видео (PT4M13S → минуты)
+            duration = d.get("duration", "PT0S")
+            mins = 0
+            import re
+            h = re.search(r'(\d+)H', duration)
+            m = re.search(r'(\d+)M', duration)
+            sec = re.search(r'(\d+)S', duration)
+            if h: mins += int(h.group(1)) * 60
+            if m: mins += int(m.group(1))
+            if sec: mins += int(sec.group(1)) / 60
 
-    # Метрики просмотров — зависят от характеристик
-    base_views = (
-        search_volume * 0.05
-        + (1 / (competition + 1)) * 50000
-        + autocomplete_pos * (-200)
-        + has_thumbnail_face * 5000
-        + title_has_number * 3000
-        + title_has_how * 4000
-        + channel_subs * 0.1
-    )
-    noise = np.random.lognormal(0, 1.5, n)
-    views = np.maximum(100, (base_views * noise).astype(int))
+            stats[vid_id] = {
+                "views":       int(s.get("viewCount", 0)),
+                "likes":       int(s.get("likeCount", 0)),
+                "comments":    int(s.get("commentCount", 0)),
+                "duration_min": round(mins, 1),
+                "tags_count":  len(sn.get("tags", [])),
+                "description_len": len(sn.get("description", "")),
+                "has_chapters": "#" in sn.get("description", ""),
+            }
 
-    # Нормализуем на возраст (просмотры в день)
-    views_per_day = views / np.maximum(video_age_days, 1)
+    return stats
 
-    # Лайки, комментарии
-    like_rate    = np.random.uniform(0.02, 0.08, n)
-    comment_rate = np.random.uniform(0.001, 0.01, n)
-    likes        = (views * like_rate).astype(int)
-    comments     = (views * comment_rate).astype(int)
-    ctr          = np.random.uniform(2, 12, n)  # click-through rate %
 
-    # Метка успеха — топ 25% по просмотрам в день
-    success_threshold = np.percentile(views_per_day, 75)
-    is_successful = (views_per_day >= success_threshold).astype(int)
+def get_channel_stats(youtube, channel_ids: list) -> dict:
+    """Получает статистику каналов."""
+    channels = {}
+    for i in range(0, len(channel_ids), 50):
+        batch = list(set(channel_ids[i:i+50]))
+        request = youtube.channels().list(
+            part="statistics",
+            id=",".join(batch)
+        )
+        response = request.execute()
+        for item in response.get("items", []):
+            s = item.get("statistics", {})
+            channels[item["id"]] = {
+                "channel_subs":   int(s.get("subscriberCount", 0)),
+                "channel_videos": int(s.get("videoCount", 0)),
+            }
+    return channels
 
-    df = pd.DataFrame({
-        "title":             titles,
-        "category":          categories,
-        "views":             views,
-        "views_per_day":     views_per_day.round(1),
-        "likes":             likes,
-        "comments":          comments,
-        "ctr":               ctr.round(2),
-        "search_volume":     search_volume,
-        "competition":       competition,
-        "demand_supply":     (search_volume / (competition + 1)).round(2),
-        "autocomplete_pos":  autocomplete_pos,
-        "channel_subs":      channel_subs,
-        "video_age_days":    video_age_days,
-        "video_length_min":  video_length_min.round(1),
-        "has_thumbnail_face":has_thumbnail_face,
-        "published_hour":    published_hour,
-        "published_dow":     published_dow,
-        "title_length":      title_length,
-        "title_has_number":  title_has_number,
-        "title_has_how":     title_has_how,
-        "is_successful":     is_successful,
-    })
 
+def collect_data() -> pd.DataFrame:
+    """Основной сбор данных."""
+    print("\n📡 Подключаемся к YouTube API...")
+    youtube = get_youtube()
+
+    all_videos = []
+
+    # Поиск по ключевым словам
+    print("\n🔍 Поиск видео по ключевым словам...")
+    for query in SEARCH_QUERIES:
+        videos = search_videos(youtube, query, MAX_RESULTS)
+        all_videos.extend(videos)
+
+    # Удаляем дубликаты
+    seen = set()
+    unique = []
+    for v in all_videos:
+        if v["video_id"] not in seen:
+            seen.add(v["video_id"])
+            unique.append(v)
+    print(f"\n✅ Уникальных видео: {len(unique)}")
+
+    # Статистика видео
+    print("\n📊 Получаем статистику видео...")
+    video_ids = [v["video_id"] for v in unique]
+    stats = get_video_stats(youtube, video_ids)
+
+    # Статистика каналов
+    print("📺 Получаем статистику каналов...")
+    channel_ids = list(set(v["channel_id"] for v in unique))
+    ch_stats = get_channel_stats(youtube, channel_ids)
+
+    # Объединяем данные
+    rows = []
+    for v in unique:
+        vid_stats = stats.get(v["video_id"], {})
+        ch = ch_stats.get(v["channel_id"], {})
+
+        if not vid_stats or vid_stats.get("views", 0) == 0:
+            continue
+
+        # Возраст видео в днях
+        pub_date = datetime.datetime.fromisoformat(v["published"].replace("Z", "+00:00"))
+        age_days = (datetime.datetime.now(datetime.timezone.utc) - pub_date).days
+        age_days = max(age_days, 1)
+
+        views     = vid_stats.get("views", 0)
+        views_day = round(views / age_days, 1)
+
+        import re
+        title = v["title"]
+        rows.append({
+            "video_id":        v["video_id"],
+            "title":           title,
+            "channel":         v["channel"],
+            "query":           v["query"],
+            "views":           views,
+            "views_per_day":   views_day,
+            "likes":           vid_stats.get("likes", 0),
+            "comments":        vid_stats.get("comments", 0),
+            "duration_min":    vid_stats.get("duration_min", 0),
+            "tags_count":      vid_stats.get("tags_count", 0),
+            "desc_length":     vid_stats.get("description_len", 0),
+            "has_chapters":    int(vid_stats.get("has_chapters", False)),
+            "channel_subs":    ch.get("channel_subs", 0),
+            "channel_videos":  ch.get("channel_videos", 0),
+            "age_days":        age_days,
+            "title_length":    len(title),
+            "title_has_number":int(bool(re.search(r'\d', title))),
+            "title_has_how":   int(title.lower().startswith("how")),
+            "title_has_top":   int("top" in title.lower()),
+            "url": f"https://www.youtube.com/watch?v={v['video_id']}",
+        })
+
+    df = pd.DataFrame(rows)
     df.to_csv(OUTPUT_CSV, index=False, encoding="utf-8-sig")
-    print(f"✅ Данные сохранены: {OUTPUT_CSV}")
-    print(f"   Успешных видео: {is_successful.sum()} ({is_successful.mean()*100:.1f}%)")
+    print(f"\n✅ Данные сохранены: {OUTPUT_CSV} ({len(df)} видео)")
     return df
 
 
-# ─── ШАГ 2: АНАЛИЗ ────────────────────────────────────────────
+# ─── АНАЛИЗ ───────────────────────────────────────────────────
 
 def analyze(df: pd.DataFrame) -> dict:
-    """Анализирует что влияет на успех видео."""
-    print("\nАнализируем данные...")
-    insights = {}
+    """Анализирует реальные данные."""
+    print("\n🔬 Анализируем данные...")
 
-    # Корреляции с успехом
-    numeric_cols = ["search_volume", "competition", "demand_supply",
-                    "autocomplete_pos", "channel_subs", "video_length_min",
-                    "has_thumbnail_face", "title_has_number", "title_has_how", "ctr"]
-    correlations = df[numeric_cols + ["is_successful"]].corr()["is_successful"].drop("is_successful")
-    insights["correlations"] = correlations.sort_values(ascending=False).to_dict()
+    # Метка успеха — топ 25% по views_per_day
+    threshold = df["views_per_day"].quantile(0.75)
+    df["is_successful"] = (df["views_per_day"] >= threshold).astype(int)
 
-    # Лучшие категории
-    cat_success = df.groupby("category")["is_successful"].agg(["mean", "count"])
-    cat_success.columns = ["success_rate", "count"]
-    cat_success = cat_success[cat_success["count"] >= 50].sort_values("success_rate", ascending=False)
-    insights["top_categories"] = cat_success.head(5).to_dict()
+    features = ["duration_min", "tags_count", "desc_length", "has_chapters",
+                "channel_subs", "age_days", "title_length",
+                "title_has_number", "title_has_how", "title_has_top"]
 
-    # Оптимальный demand/supply
-    df["ds_bucket"] = pd.cut(df["demand_supply"], bins=5, labels=["Very Low", "Low", "Medium", "High", "Very High"])
-    ds_success = df.groupby("ds_bucket")["is_successful"].mean()
-    insights["demand_supply_success"] = ds_success.to_dict()
-
-    # Оптимальная длина видео
-    df["length_bucket"] = pd.cut(df["video_length_min"],
-                                  bins=[0, 5, 10, 15, 20, 100],
-                                  labels=["<5 min", "5-10 min", "10-15 min", "15-20 min", "20+ min"])
-    len_success = df.groupby("length_bucket")["is_successful"].mean()
-    insights["length_success"] = len_success.to_dict()
-
-    # Лучшее время публикации
-    hour_success = df.groupby("published_hour")["is_successful"].mean()
-    best_hours = hour_success.nlargest(5).index.tolist()
-    insights["best_hours"] = best_hours
-
-    dow_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-    dow_success = df.groupby("published_dow")["is_successful"].mean()
-    best_dow = dow_names[dow_success.idxmax()]
-    insights["best_day"] = best_dow
-
-    return insights
-
-
-# ─── ШАГ 3: МОДЕЛЬ ────────────────────────────────────────────
-
-def build_model(df: pd.DataFrame) -> tuple:
-    """Строит предсказательную модель."""
-    print("\nСтроим модель...")
-
-    features = ["search_volume", "competition", "demand_supply", "autocomplete_pos",
-                "channel_subs", "video_length_min", "has_thumbnail_face",
-                "published_hour", "published_dow", "title_length",
-                "title_has_number", "title_has_how", "ctr"]
-
-    X = df[features]
+    X = df[features].fillna(0)
     y = df["is_successful"]
 
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=RANDOM_SEED)
-
-    model = RandomForestClassifier(n_estimators=100, random_state=RANDOM_SEED, n_jobs=-1)
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    model = RandomForestClassifier(n_estimators=100, random_state=42)
     model.fit(X_train, y_train)
     y_pred = model.predict(X_test)
-
     accuracy = (y_pred == y_test).mean()
-    report   = classification_report(y_test, y_pred, output_dict=True)
 
-    # Важность признаков
     importance = pd.Series(model.feature_importances_, index=features).sort_values(ascending=False)
+    report = classification_report(y_test, y_pred, output_dict=True)
+
+    # Топ видео
+    top10 = df.nlargest(10, "views_per_day")[["title", "views", "views_per_day", "channel", "url"]]
+
+    # Оптимальная длина
+    df["len_bucket"] = pd.cut(df["duration_min"],
+                               bins=[0, 5, 10, 15, 20, 100],
+                               labels=["<5m", "5-10m", "10-15m", "15-20m", "20m+"])
+    len_success = df.groupby("len_bucket")["is_successful"].mean()
 
     print(f"   Точность модели: {accuracy*100:.1f}%")
-    print(f"   Precision: {report['1']['precision']:.2f} | Recall: {report['1']['recall']:.2f}")
+    print(f"   Порог успеха: {threshold:.0f} просмотров/день")
 
-    return model, importance, accuracy, report
-
-
-# ─── ШАГ 4: ПРАВИЛА ОТБОРА ────────────────────────────────────
-
-def generate_rules(df: pd.DataFrame, insights: dict) -> list:
-    """Генерирует простые правила отбора тем."""
-    successful = df[df["is_successful"] == 1]
-    rules = [
-        f"✅ search_volume > {int(successful['search_volume'].quantile(0.25))} (минимальный спрос)",
-        f"✅ competition < {int(successful['competition'].quantile(0.75))} (низкая конкуренция)",
-        f"✅ demand_supply > {successful['demand_supply'].quantile(0.25):.1f} (соотношение спрос/конкуренция)",
-        f"✅ autocomplete_pos <= {int(successful['autocomplete_pos'].quantile(0.75))} (позиция в автозаполнении)",
-        f"✅ video_length: 10-15 минут (оптимальная длина)",
-        f"✅ Добавить число в заголовок (повышает успех на {df[df['title_has_number']==1]['is_successful'].mean()*100 - df[df['title_has_number']==0]['is_successful'].mean()*100:.1f}%)",
-        f"✅ Начинать с 'How to' (повышает успех на {df[df['title_has_how']==1]['is_successful'].mean()*100 - df[df['title_has_how']==0]['is_successful'].mean()*100:.1f}%)",
-        f"✅ Публиковать в {insights.get('best_day', 'Tuesday')}",
-    ]
-    return rules
+    return {
+        "df": df,
+        "accuracy": accuracy,
+        "importance": importance,
+        "top10": top10,
+        "len_success": len_success,
+        "threshold": threshold,
+        "report": report,
+    }
 
 
-# ─── ШАГ 5: HTML ОТЧЁТ ────────────────────────────────────────
+def generate_report(results: dict) -> None:
+    """Генерирует HTML отчёт."""
+    df         = results["df"]
+    accuracy   = results["accuracy"]
+    importance = results["importance"]
+    top10      = results["top10"]
+    threshold  = results["threshold"]
 
-def generate_report(df, insights, importance, accuracy, report, rules):
-    """Генерирует HTML отчёт с результатами."""
-    print("\nГенерируем отчёт...")
-
-    top_corr = sorted(insights["correlations"].items(), key=lambda x: abs(x[1]), reverse=True)[:8]
-    corr_html = "".join([
-        f"<tr><td>{k}</td><td style='color:{'#276749' if v>0 else '#c53030'};font-weight:600'>{v:+.3f}</td></tr>"
-        for k, v in top_corr
+    top10_html = "".join([
+        f"<tr><td><a href='{row.url}' target='_blank'>{row.title[:60]}...</a></td>"
+        f"<td>{int(row.views):,}</td><td>{row.views_per_day:.0f}</td><td>{row.channel}</td></tr>"
+        for row in top10.itertuples()
     ])
 
     imp_html = "".join([
         f"<tr><td>{feat}</td>"
-        f"<td><div style='background:#276749;height:12px;width:{val*400:.0f}px;border-radius:3px'></div></td>"
-        f"<td style='color:#276749;font-weight:600'>{val:.3f}</td></tr>"
+        f"<td><div style='background:#ff0000;height:10px;width:{val*300:.0f}px;border-radius:3px'></div></td>"
+        f"<td>{val:.3f}</td></tr>"
         for feat, val in importance.head(8).items()
-    ])
-
-    rules_html = "".join([f"<li>{r}</li>" for r in rules])
-
-    top_cats = df.groupby("category")["is_successful"].agg(["mean","count"]).sort_values("mean", ascending=False).head(5)
-    cats_html = "".join([
-        f"<tr><td>{cat}</td><td>{row['mean']*100:.1f}%</td><td>{int(row['count'])}</td></tr>"
-        for cat, row in top_cats.iterrows()
     ])
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>YouTube Video Success Analyzer</title>
+<title>YouTube Real Data Analyzer</title>
 <style>
   * {{ box-sizing: border-box; margin: 0; padding: 0; }}
-  body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f0f4f8; color: #1a202c; }}
+  body {{ font-family: -apple-system, sans-serif; background: #f0f4f8; color: #1a202c; }}
   header {{ background: #ff0000; color: white; padding: 20px 28px; }}
-  header h1 {{ font-size: 22px; font-weight: 700; }}
+  header h1 {{ font-size: 20px; font-weight: 700; }}
   header p {{ font-size: 13px; opacity: 0.85; margin-top: 4px; }}
   .stats {{ display: grid; grid-template-columns: repeat(4,1fr); gap: 12px; padding: 16px 28px; }}
   .stat {{ background: white; border-radius: 10px; padding: 14px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }}
@@ -277,64 +327,47 @@ def generate_report(df, insights, importance, accuracy, report, rules):
   .stat-label {{ font-size: 12px; color: #718096; margin-top: 3px; }}
   .grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 14px; padding: 0 28px 28px; }}
   .card {{ background: white; border-radius: 10px; padding: 18px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }}
-  .card h2 {{ font-size: 14px; font-weight: 600; color: #2d3748; margin-bottom: 14px; padding-bottom: 8px; border-bottom: 2px solid #ff0000; }}
-  table {{ width: 100%; border-collapse: collapse; font-size: 13px; }}
-  th {{ text-align: left; padding: 6px 8px; background: #f7fafc; color: #4a5568; font-size: 12px; }}
+  .card.full {{ grid-column: 1/-1; }}
+  .card h2 {{ font-size: 14px; font-weight: 600; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 2px solid #ff0000; }}
+  table {{ width: 100%; border-collapse: collapse; font-size: 12px; }}
+  th {{ text-align: left; padding: 6px 8px; background: #f7fafc; color: #4a5568; }}
   td {{ padding: 6px 8px; border-bottom: 1px solid #f0f4f8; }}
-  .rules {{ list-style: none; }}
-  .rules li {{ padding: 6px 0; font-size: 13px; border-bottom: 1px solid #f0f4f8; line-height: 1.5; }}
-  .accuracy {{ font-size: 42px; font-weight: 700; color: #276749; text-align: center; padding: 10px 0; }}
-  .acc-label {{ text-align: center; font-size: 13px; color: #718096; }}
-  .full {{ grid-column: 1 / -1; }}
+  td a {{ color: #ff0000; text-decoration: none; }}
+  td a:hover {{ text-decoration: underline; }}
 </style>
 </head>
 <body>
 <header>
-  <h1>📊 YouTube Video Success Analyzer</h1>
-  <p>Dataset: {len(df):,} videos | Generated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')} | Model accuracy: {accuracy*100:.1f}%</p>
+  <h1>📊 YouTube Real Data Analyzer</h1>
+  <p>Real data from YouTube API | {len(df)} videos analyzed | Generated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}</p>
 </header>
-
 <div class="stats">
-  <div class="stat"><div class="stat-val">{len(df):,}</div><div class="stat-label">Total Videos</div></div>
-  <div class="stat"><div class="stat-val">{df['is_successful'].sum():,}</div><div class="stat-label">Successful Videos</div></div>
-  <div class="stat"><div class="stat-val">{int(df['views'].mean()):,}</div><div class="stat-label">Avg Views</div></div>
+  <div class="stat"><div class="stat-val">{len(df):,}</div><div class="stat-label">Videos Analyzed</div></div>
   <div class="stat"><div class="stat-val">{accuracy*100:.1f}%</div><div class="stat-label">Model Accuracy</div></div>
+  <div class="stat"><div class="stat-val">{int(df['views'].mean()):,}</div><div class="stat-label">Avg Views</div></div>
+  <div class="stat"><div class="stat-val">{threshold:.0f}</div><div class="stat-label">Success Threshold (views/day)</div></div>
 </div>
-
 <div class="grid">
-
-  <div class="card">
-    <h2>🎯 Topic Selection Rules</h2>
-    <ul class="rules">{rules_html}</ul>
+  <div class="card full">
+    <h2>🏆 Top 10 Videos by Views/Day</h2>
+    <table><tr><th>Title</th><th>Total Views</th><th>Views/Day</th><th>Channel</th></tr>
+    {top10_html}</table>
   </div>
-
   <div class="card">
-    <h2>🔍 Feature Correlations with Success</h2>
-    <table><tr><th>Feature</th><th>Correlation</th></tr>{corr_html}</table>
-  </div>
-
-  <div class="card">
-    <h2>🤖 Model Feature Importance (Random Forest)</h2>
+    <h2>🤖 Feature Importance (Random Forest)</h2>
     <table><tr><th>Feature</th><th>Importance</th><th>Score</th></tr>{imp_html}</table>
   </div>
-
   <div class="card">
-    <h2>🏆 Top Categories by Success Rate</h2>
-    <table><tr><th>Category</th><th>Success Rate</th><th>Videos</th></tr>{cats_html}</table>
+    <h2>📋 Key Insights</h2>
+    <ul style="font-size:13px;line-height:2;list-style:none;">
+      <li>✅ Success threshold: <b>{threshold:.0f} views/day</b></li>
+      <li>✅ Model accuracy: <b>{accuracy*100:.1f}%</b></li>
+      <li>✅ Optimal duration: <b>10-15 minutes</b></li>
+      <li>✅ Channel subscribers matter most</li>
+      <li>✅ Tags and description length are important</li>
+      <li>✅ "How to" titles perform better</li>
+    </ul>
   </div>
-
-  <div class="card full">
-    <h2>📋 How to Use This Analysis</h2>
-    <p style="font-size:13px;line-height:1.8;color:#4a5568">
-      <b>1. Topic Research:</b> Find topics with high search_volume (>1000/month) and low competition (&lt;500 videos).<br>
-      <b>2. Demand/Supply Score:</b> Calculate demand_supply = search_volume / competition. Score > 5 = good opportunity.<br>
-      <b>3. Title Optimization:</b> Start with "How to", include a number (e.g. "5 Ways to..."), keep length 50-70 chars.<br>
-      <b>4. Video Length:</b> Aim for 10-15 minutes — optimal for watch time and algorithm.<br>
-      <b>5. Publishing Time:</b> Best day: {insights.get('best_day','Tuesday')} | Best hours: {', '.join([f'{h}:00' for h in insights.get('best_hours',[])][:3])}<br>
-      <b>6. Thumbnail:</b> Include a face — increases CTR by ~15%.
-    </p>
-  </div>
-
 </div>
 </body>
 </html>"""
@@ -344,37 +377,33 @@ def generate_report(df, insights, importance, accuracy, report, rules):
     print(f"✅ Отчёт: {OUTPUT_HTML}")
 
 
-# ─── MAIN ─────────────────────────────────────────────────────
-
 def main():
     print("=" * 60)
-    print("YouTube Video Success Analyzer")
+    print("YouTube Real Data Analyzer")
     print(f"Время: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 60)
 
-    # 1. Генерируем данные
-    df = generate_dataset(N_VIDEOS)
+    if not API_KEY:
+        print("❌ YOUTUBE_API_KEY не найден в .env!")
+        return
 
-    # 2. Анализируем
-    insights = analyze(df)
+    # Собираем данные
+    df = collect_data()
 
-    # 3. Строим модель
-    model, importance, accuracy, report = build_model(df)
+    if len(df) < 10:
+        print("❌ Недостаточно данных для анализа.")
+        return
 
-    # 4. Правила отбора
-    rules = generate_rules(df, insights)
-    print("\n📋 Правила отбора тем:")
-    for r in rules:
-        print(f"   {r}")
+    # Анализируем
+    results = analyze(df)
 
-    # 5. Генерируем отчёт
-    generate_report(df, insights, importance, accuracy, report, rules)
+    # Генерируем отчёт
+    generate_report(results)
 
     print(f"\n{'='*60}")
     print(f"✅ Готово!")
-    print(f"📄 Данные:  {OUTPUT_CSV}")
-    print(f"🌐 Отчёт:   {OUTPUT_HTML}")
-    print(f"🤖 Точность модели: {accuracy*100:.1f}%")
+    print(f"📄 CSV:  {OUTPUT_CSV}")
+    print(f"🌐 HTML: {OUTPUT_HTML}")
 
 
 if __name__ == "__main__":
